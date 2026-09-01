@@ -41,7 +41,10 @@ impl<'a> VersionChunkIter<'a> {
         };
 
         let zeros = source.chars().take_while(|c| *c == '0').count();
-        let value = source.parse::<usize>().ok()?;
+        // Saturate on overflow instead of dropping the chunk: dropping ends
+        // the iterator early, so the chunk and everything after it is
+        // silently discarded and too-long identifiers sort as "less".
+        let value = source.parse::<usize>().unwrap_or(usize::MAX);
 
         Some(VersionChunk::Number {
             value,
@@ -568,5 +571,31 @@ mod test {
         ];
         input.sort_by(|a, b| version_sort(a, b));
         pretty_assertions::assert_eq!(input, expected);
+    }
+
+    #[test]
+    fn test_numeric_chunk_overflow_saturates() {
+        // 23 digits exceed usize::MAX; the chunk must not be dropped.
+        assert_eq!(
+            version_sort("v99999999999999999999999", "v1"),
+            std::cmp::Ordering::Greater
+        );
+
+        // Content after an overflowing chunk must still participate in the
+        // comparison instead of being silently discarded.
+        assert_eq!(
+            version_sort("v99999999999999999999999zz", "v99999999999999999999999aa"),
+            std::cmp::Ordering::Greater
+        );
+
+        // usize::MAX itself parses exactly; the value just above saturates to it.
+        assert_eq!(
+            version_sort("18446744073709551615", "18446744073709551616"),
+            std::cmp::Ordering::Equal
+        );
+
+        let mut input = vec!["v1", "v99999999999999999999999", "v2"];
+        input.sort_by(|a, b| version_sort(a, b));
+        pretty_assertions::assert_eq!(input, vec!["v1", "v2", "v99999999999999999999999"]);
     }
 }
